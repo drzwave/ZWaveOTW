@@ -31,6 +31,7 @@
 '''
 
 import serial           # serial port control
+from intelhex import IntelHex   # utilities for reading in the hex file - "pip install intelhex" if you don't already have it
 import sys
 import time
 import os
@@ -39,7 +40,7 @@ from struct            import * # PACK
 
 COMPORT       = "/dev/ttyAMA0" # Serial port default
 
-DEBUG         = 10     # higher values print out more debugging info - 0=off
+DEBUG         = 9     # higher values print out more debugging info - 0=off
 
 # Handy defines mostly copied from ZW_transport_api.py
 FUNC_ID_SERIAL_API_GET_INIT_DATA    = 0x02
@@ -52,6 +53,14 @@ FUNC_ID_ZW_GET_VERSION              = 0x15
 FUNC_ID_ZW_ADD_NODE_TO_NETWORK      = 0x4A
 FUNC_ID_ZW_REMOVE_NODE_FROM_NETWORK = 0x4B
 FUNC_ID_ZW_FIRMWARE_UPDATE_NVM      = 0x78
+
+# Firmware Update NVM commands
+FIRMWARE_UPDATE_NVM_INIT            = 0
+FIRMWARE_UPDATE_NVM_SET_NEW_IMAGE   = 1
+FIRMWARE_UPDATE_NVM_GET_NEW_IMAGE   = 2
+FIRMWARE_UPDATE_NVM_UPDATE_CRC16    = 3
+FIRMWARE_UPDATE_NVM_IS_VALID_CRC16  = 4
+FIRMWARE_UPDATE_NVM_WRITE           = 5
 
 # Z-Wave Library Types
 ZW_LIB_CONTROLLER_STATIC  = 0x01
@@ -98,7 +107,8 @@ REQUEST = 0x00
 RESPONSE = 0x01
 # Most Z-Wave commands want the autoroute option on to be sure it gets thru. Don't use Explorer though as that causes unnecessary delays.
 TXOPTS = TRANSMIT_OPTION_AUTO_ROUTE | TRANSMIT_OPTION_ACK
-ZWAVE_VER_DECODE = {    # Z-Wave version to SDK decoder: https://www.silabs.com/products/development-tools/software/z-wave/embedded-sdk/previous-versions
+
+ZWAVE_VER_DECODE = {# Z-Wave version to SDK decoder: https://www.silabs.com/products/development-tools/software/z-wave/embedded-sdk/previous-versions
         "6.01" : "SDK 6.81.00 09/2017",
         "5.02" : "SDK 6.71.02 07/2017",
         "4.61" : "SDK 6.71.01 03/2017",
@@ -199,15 +209,18 @@ class ZWaveOTW():
         '''
         if self.UZB.inWaiting(): 
             self.UZB.write(pack("B",ACK))  # ACK just to clear out any retries
-            print "Dumping ",
+            if DEBUG>5: print "Dumping ",
         while self.UZB.inWaiting(): # purge UART RX to remove any old frames we don't want
             c=self.UZB.read()
-            if DEBUG>9: print " {:02X}".format(ord(c)),
+            if DEBUG>5: print "{:02X}".format(ord(c)),
         frame = pack("2B", len(SerialAPIcmd)+2, REQUEST) + SerialAPIcmd # add LEN and REQ bytes which are part of the checksum
         chksum= self.checksum(frame)
         pkt = (pack("B",SOF) + frame + pack("B",chksum)) # add SOF to front and CHECKSUM to end
+        if DEBUG>9: print "Sending ", 
         for c in pkt:
+            if DEBUG>9: print "{:02X},".format(ord(c)),
             self.UZB.write(c)  # send the command
+        if DEBUG>9: print " "
         # should always get an ACK/NAK/CAN so wait for it here
         c=self.GetRxChar(500) # wait up to half second for the ACK
         if c==None:
@@ -237,113 +250,44 @@ class ZWaveOTW():
             if DEBUG>1: print "Failed to remove Lifeline"
         else:
             print "Lifeline removed"
-        if DEBUG>12: 
+        if DEBUG>10: 
             for i in range(len(pkt)): 
                 print "{:02X}".format(ord(pkt[i])),
 
-    def mainloop(self):             # TODO expecting to dump all of this as this program is just command line
-        line = raw_input('>')
-        if len(line)<1: line=' '
-        while line[0]!='x' or 'exit' in line:     # Exit when you enter X
-            if line[0]=='z':    # Get the SerialAPI version - basic check that the UZB is working
-                pkt=self.Send2ZWave(pack("B",FUNC_ID_SERIAL_API_GET_CAPABILITIES),True)
-                if len(pkt)<37 or len(pkt)>46: # should be 41 bytes - if not, try again
-                    pkt=self.Send2ZWave(pack("B",FUNC_ID_SERIAL_API_GET_CAPABILITIES),True)
-                (ver, rev, man_id, man_prod_type, man_prod_type_id, supported) = unpack("!2B3H32s", pkt[1:])
-                print "SerialAPI Ver={0}.{1}".format(ver,rev)
-                if (man_id==0x001E):
-                    print "Mfg=Express Controls"
-                else:
-                    print "Mfg={:04X}".format(man_id)
-                print "ProdID/TypeID={0:02X}:{1:02X}".format(man_prod_type,man_prod_type_id)
-                pkt=self.Send2ZWave(pack("B",FUNC_ID_SERIAL_API_GET_INIT_DATA),True)
-                if pkt!=None and len(pkt)>33:
-                    print "NodeIDs=",
-                    for k in [4,28+4]:
-                        j=ord(pkt[k]) # this is the first 8 nodes
-                        for i in range(0,8):
-                            if (1<<i)&j:
-                                print "{},".format(i+1+ 8*(k-4)),
-                print " "
-            elif 'Table' in line: # Assign the TurnTable NodeID
-                linesplit=line.split()
-                self.TableNodeID=int(linesplit[1])
-                print 'TurnTable NodeID set to {}'.format(self.TableNodeID)
-            elif 'DUT' in line: # Assign the DevKit NodeID
-                linesplit=line.split()
-                self.DUTNodeID=int(linesplit[1])
-                print 'Dut NodeID set to {}'.format(self.DUTNodeID)
-            elif 'DevKit' in line: # Assign the DevKit NodeID
-                linesplit=line.split()
-                self.DevKitNodeID=int(linesplit[1])
-            elif 'Orient' in line: # change the number of orientations
-                linesplit=line.split()
-                self.NumberOfOrientations=int(linesplit[1])
-                print 'Orientations set to {}'.format(self.NumberOfOrientations)
-            elif line[0]=='l': # Remove the lifeline from the DevKit NodeID
-                self.RemoveLifeline(self.DevKitNodeID)
-                self.RemoveLifeline(self.TableNodeID)
-            elif line[0]=='r': # Range test
-                result=self.RunRangeTest(self.NumberOfNOPs)
-                print result
-            elif line[0]=='o': # Run all orientations
-                linesplit=line.split()
-                if len(linesplit)!=2:
-                    print "need a distance - o xxx - where xxx is the distance between the DevKit and the DUT"
-                else:
-                    self.RunOrientations(self.NumberOfOrientations,linesplit[1])
-            elif line[0]=='0': # Set the rotating table to 0 degrees
-                pkt=self.Send2ZWave(pack("!8B",FUNC_ID_ZW_SEND_DATA, self.TableNodeID, 3, 0x20, 0x01, 0, TXOPTS, 79),True) # Basic Set of 0%
-                pkt=self.GetZWave(1000)
-            elif line[0]=='1': # Set the rotating table to 90 degrees
-                pkt=self.Send2ZWave(pack("!8B",FUNC_ID_ZW_SEND_DATA, self.TableNodeID, 3, 0x20, 0x01, 25, TXOPTS, 79),True)
-                pkt=self.GetZWave(1000)
-            elif line[0]=='2': # Set the rotating table to 180 degrees
-                pkt=self.Send2ZWave(pack("!8B",FUNC_ID_ZW_SEND_DATA, self.TableNodeID, 3, 0x20, 0x01, 50, TXOPTS, 79),True)
-                pkt=self.GetZWave(1000)
-            elif line[0]=='3': # Set the rotating table to 270 degrees
-                pkt=self.Send2ZWave(pack("!8B",FUNC_ID_ZW_SEND_DATA, self.TableNodeID, 3, 0x20, 0x01, 75, TXOPTS, 79),True)
-                pkt=self.GetZWave(1000)
-            elif line[0]=='+': # inclusion mode
-                pkt=self.Send2ZWave(pack("3B",FUNC_ID_ZW_ADD_NODE_TO_NETWORK, ADD_NODE_ANY, 0xaa),True)
-                (cmd,FuncID,bStatus)= unpack("BBB",pkt[:3]) # first status should be 01=learn_ready
-                if (bStatus==ADD_NODE_STATUS_LEARN_READY):
-                    print "Press Button on Device"
-                while not (bStatus==ADD_NODE_STATUS_FAILED or bStatus==ADD_NODE_STATUS_DONE): # will get several callbacks until DONE with info along the way
-                    pkt=self.GetZWave(50*1000)      # wait for up to 50seconds for a response
-                    (cmd,FuncID,bStatus)= unpack("BBB",pkt[:3])
-                    #print "Adding Status={}".format(bStatus)
-                    if bStatus==ADD_NODE_STATUS_PROTOCOL_DONE: # required to send it again to get to DONE
-                        pkt=self.Send2ZWave(pack("3B",FUNC_ID_ZW_ADD_NODE_TO_NETWORK, ADD_NODE_STOP, 0xaa),False)
-                    if (bStatus==ADD_NODE_STATUS_ADDING_SLAVE or bStatus==ADD_NODE_STATUS_ADDING_CONTROLLER):
-                        stuff,=unpack("B",pkt[3])
-                        print "Added Node {}".format(stuff)
-                if bStatus==ADD_NODE_STATUS_FAILED:
-                    print "Add node failed"
-                self.Send2ZWave(pack("BB",FUNC_ID_ZW_ADD_NODE_TO_NETWORK, ADD_NODE_STOP),False) # cleanup
-            elif line[0]=='-': # exclusion mode
-                pkt=self.Send2ZWave(pack("3B",FUNC_ID_ZW_REMOVE_NODE_FROM_NETWORK, REMOVE_NODE_ANY, 0xdd),True) # go into exclude mode but wait up to 60 seconds for a response
-                (cmd,FuncID,bStatus)= unpack("BBB",pkt[:3]) # first status should be 01=learn_ready
-                if (bStatus==REMOVE_NODE_STATUS_LEARN_READY):
-                    print "Press Button on Device"
-                while not (bStatus==REMOVE_NODE_STATUS_FAILED or bStatus==REMOVE_NODE_STATUS_DONE): # will get several callbacks until DONE with info along the way
-                    pkt=self.GetZWave(50*1000)      # wait for up to 50seconds for a response
-                    (cmd,FuncID,bStatus)= unpack("BBB",pkt[:3])
-                    if (bStatus==REMOVE_NODE_STATUS_REMOVING_SLAVE or bStatus==REMOVE_NODE_STATUS_REMOVING_CONTROLLER):
-                        stuff,=unpack("B",pkt[3])
-                        print "Excluded Node {}".format(stuff)
-                self.Send2ZWave(pack("BB",FUNC_ID_ZW_REMOVE_NODE_FROM_NETWORK, REMOVE_NODE_STOP),False) # cleanup
-            elif line[0]=='q' or line[0]=='x':
-                return
-            elif line[0]=='?':
-                self.usage()
-            line = raw_input('>') # get the next command
-            if len(line)<1: line=' '    # if the user just hit <CR> ignore it
-        return
+    def PrintVersion(self):
+        pkt=self.Send2ZWave(pack("B",FUNC_ID_SERIAL_API_GET_CAPABILITIES),True)
+        (ver, rev, man_id, man_prod_type, man_prod_type_id, supported) = unpack("!2B3H32s", pkt[1:])
+        print "SerialAPI Ver={0}.{1}".format(ver,rev)   # SerialAPI version is different than the SDK version
+        print "Mfg={:04X}".format(man_id)
+        print "ProdID/TypeID={0:02X}:{1:02X}".format(man_prod_type,man_prod_type_id)
+        pkt=self.Send2ZWave(pack("B",FUNC_ID_ZW_GET_VERSION),True)  # SDK version
+        (VerStr, lib) = unpack("!12sB", pkt[1:])
+        print "{} {}".format(VerStr,ZWAVE_VER_DECODE[VerStr[-5:-1]])
+        print "Library={} {}".format(lib,libType[lib])
+        pkt=self.Send2ZWave(pack("B",FUNC_ID_SERIAL_API_GET_INIT_DATA),True)
+        if pkt!=None and len(pkt)>33:
+            print "NodeIDs=",
+            for k in [4,28+4]:
+                j=ord(pkt[k]) # this is the first 8 nodes
+                for i in range(0,8):
+                    if (1<<i)&j:
+                        print "{},".format(i+1+ 8*(k-4)),
+            print " "
+        pkt=self.Send2ZWave(pack("BB",FUNC_ID_ZW_FIRMWARE_UPDATE_NVM,FIRMWARE_UPDATE_NVM_INIT),True)
+        (cmd, FirmwareUpdateSupported) = unpack("!BB", pkt[1:])
+        if FirmwareUpdateSupported!=0x01:
+            print "Firmware is not OTW capable - exiting {}".format(FirmwareUpdateSupported)
+            exit()
+        if self.filename=="":        # Skip OTW if no hex file is on the command line
+            exit()
 
     def usage(self):
         print "Usage: python ZWaveOTW.py [filename] [COMxx]"
-        print "Version 0.10  18 Jan 2019"
+        print "Version 0.11  21 Jan 2019"
+        print "Filename is the name of the hex file to be programmed into the Z-Wave Interface"
+        print "Filename must not contain the strings 'COM' or 'tty'"
+        print "If Filename is not included then the version of the Z-Wave Interface is printed"
+        print "COMxx is the Z-Wave UART interface - typically COMxx for windows and /dev/ttyXXXX for Linux"
         print ""
 
 if __name__ == "__main__":
@@ -355,33 +299,38 @@ if __name__ == "__main__":
         exit()
 
     # fetch and display various attributes of the Controller - these are not required
-    pkt=self.Send2ZWave(pack("B",FUNC_ID_SERIAL_API_GET_CAPABILITIES),True)
-    (ver, rev, man_id, man_prod_type, man_prod_type_id, supported) = unpack("!2B3H32s", pkt[1:])
-    print "SerialAPI Ver={0}.{1}".format(ver,rev)   # SerialAPI version is different than the SDK version
-    print "Mfg={:04X}".format(man_id)
-    print "ProdID/TypeID={0:02X}:{1:02X}".format(man_prod_type,man_prod_type_id)
-    pkt=self.Send2ZWave(pack("B",FUNC_ID_ZW_GET_VERSION),True)  # SDK version
-    (VerStr, lib) = unpack("!12sB", pkt[1:])
-    print "{} {}".format(VerStr,ZWAVE_VER_DECODE[VerStr[-5:-1]])
-    print "Library={} {}".format(lib,libType[lib])
-    pkt=self.Send2ZWave(pack("B",FUNC_ID_SERIAL_API_GET_INIT_DATA),True)
-    if pkt!=None and len(pkt)>33:
-        print "NodeIDs=",
-        for k in [4,28+4]:
-            j=ord(pkt[k]) # this is the first 8 nodes
-            for i in range(0,8):
-                if (1<<i)&j:
-                    print "{},".format(i+1+ 8*(k-4)),
-        print " "
-    pkt=self.Send2ZWave(pack("BB",FUNC_ID_ZW_FIRMWARE_UPDATE_NVM,0x00),True)
-    (cmd, FirmwareUpdateSupported) = unpack("!BB", pkt[1:])
-    if FirmwareUpdateSupported!=0x01:
-        print "Firmware is not OTW capable - exiting {}".format(FirmwareUpdateSupported)
+    self.PrintVersion()
+
+    # read in the hex file
+    blank=IntelHex()
+    for i in range (0,128*1024):
+        blank[i]=255
+    try:
+        ih = IntelHex(self.filename)
+    except:
+        print "Failed to open {}".format(self.filename)
         exit()
-    if self.filename=="":        # Skip OTW if no hex file is on the command line
-        exit()
+    ih.merge(blank,overlap='ignore')         # fill the empty spaces of the .hex file with 0xFF
 
     # Begin the OTW process
+    for offset in range(0,1*1024,32): # TODO should be 128*1024
+        mystr=""
+        for i in range(0,32):
+            mystr+=pack("B",ih[i+offset])
+        pkt=self.Send2ZWave(pack("BBBBBBB32s",FUNC_ID_ZW_FIRMWARE_UPDATE_NVM,FIRMWARE_UPDATE_NVM_WRITE,(offset>>16)&0x0FF,(offset>>8)&0x0FF,offset&0x0FF,0, 32,mystr),True)   # write 32 bytes per block
+        if ord(pkt[2])!=0x01 or ord(pkt[0])!=0x78 or ord(pkt[1])!=0x05: # Then the frame failed so just exit and try again
+            print "Download failed: Expected 0x78, 0x05, 0x02, got {:02X}, {:02X}, {:02X}".format(ord(pkt[0]),ord(pkt[1]),ord(pkt[2]))
+            exit()
+
+    pkt=self.Send2ZWave(pack("BB",FUNC_ID_ZW_FIRMWARE_UPDATE_NVM,FIRMWARE_UPDATE_NVM_IS_VALID_CRC16),True) 
+    (retVal,crc16) = unpack("!BH",pkt[2:5])
+    print "RetVal={} CRC={}".format(retVal,crc16)
+    self.Send2ZWave(pack("B",FUNC_ID_SERIAL_API_SOFT_RESET),False)  # Reboot!
+
+    print "Rebooting the Z-Wave Interface - please wait..."
+    time.sleep(5)   # reboot takes several seconds while the flash is updated
+    self.PrintVersion()
+    print "Done"
 
     exit()
 
