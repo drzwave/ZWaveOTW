@@ -1,9 +1,11 @@
 ''' Z-Wave Over-The-Wire firmware update
 
-    This Python program will attempt to update the firmware with the desired hex file.
+    This Python program will attempt to update the firmware on a 500 series Z-Wave chip with the desired hex file.
     Note that the target MUST be OTW capable which means the interface MUST have a 2Mbit
     serial flash chip. Most UZBs do NOT have OTW capability and cannot be updated with 
     this program. Use the PC Programmer to update UZBs.
+    The library type of the firmware can be changed. 
+    Switching from a Static Controller to the Bridge Controller is needed to switch to Z/IP.
 
     This program is a DEMO only and is provided AS-IS and without support. 
     But feel free to copy and improve!
@@ -16,7 +18,7 @@
     COMx is optional and is the COM port or /dev/tty* port of the Z-Wave interface.
     Tested using Python 2.7 - untested on Python 3
 
-    Only 500 series Z-Wave chips have OTW. 300 series do not nor do the 400 series.
+    Only 500 series Z-Wave chips have OTW. 300 series do not nor do the 400 series. The 700 series uses an entirely different method.
 
     The program has been tested and works on a Raspberry Pi with an EZZee Z-Wave interface 
     board plugged into the 40 pin header. Note that the RPi must have the UART swapped 
@@ -40,6 +42,7 @@ from struct            import * # PACK
 
 COMPORT       = "/dev/ttyAMA0" # Serial port default
 
+VERSION       = "0.1 - 2/13/2019"       # Version of this python program
 DEBUG         = 9     # higher values print out more debugging info - 0=off
 
 # Handy defines mostly copied from ZW_transport_api.py
@@ -108,8 +111,10 @@ RESPONSE = 0x01
 # Most Z-Wave commands want the autoroute option on to be sure it gets thru. Don't use Explorer though as that causes unnecessary delays.
 TXOPTS = TRANSMIT_OPTION_AUTO_ROUTE | TRANSMIT_OPTION_ACK
 
+# See INS13954-7 section 7 Application Note: Z-Wave Protocol Versions on page 433
 ZWAVE_VER_DECODE = {# Z-Wave version to SDK decoder: https://www.silabs.com/products/development-tools/software/z-wave/embedded-sdk/previous-versions
         "6.01" : "SDK 6.81.00 09/2017",
+        "5.03" : "SDK 6.71.03        ",
         "5.02" : "SDK 6.71.02 07/2017",
         "4.61" : "SDK 6.71.01 03/2017",
         "4.60" : "SDK 6.71.00 01/2017",
@@ -125,7 +130,11 @@ ZWAVE_VER_DECODE = {# Z-Wave version to SDK decoder: https://www.silabs.com/prod
         "3.95" : "SDK 6.51.02 05/2014",
         "3.92" : "SDK 6.51.01 04/2014",
         "3.83" : "SDK 6.51.00 12/2013",
-        "3.83" : "SDK 6.51.00 12/2013"
+        "3.79" : "SDK 6.50.01        ",
+        "3.71" : "SDK 6.50.00        ",
+        "3.35" : "SDK 6.10.00        ",
+        "3.41" : "SDK 6.02.00        ",
+        "3.37" : "SDK 6.01.03        "
         }
 
 class ZWaveOTW():
@@ -204,7 +213,7 @@ class ZWaveOTW():
         ''' Send the command via the SerialAPI to the Z-Wave chip and optionally wait for a response.
             If ReturnStringFlag=True then returns a binary string of the SerialAPI frame response
             else returns None
-            Waits for the ACK/NAK/CAN for the SerialAPI and strips that off.
+            Waits for the ACK/NAK/CAN for the SerialAPI and strips that off. 
             Removes all SerialAPI data from the UART before sending and ACKs to clear any retries.
         '''
         if self.UZB.inWaiting(): 
@@ -282,8 +291,9 @@ class ZWaveOTW():
             exit()
 
     def usage(self):
+        print ""
         print "Usage: python ZWaveOTW.py [filename] [COMxx]"
-        print "Version 0.11  21 Jan 2019"
+        print "Version {}".format(VERSION)
         print "Filename is the name of the hex file to be programmed into the Z-Wave Interface"
         print "Filename must not contain the strings 'COM' or 'tty'"
         print "If Filename is not included then the version of the Z-Wave Interface is printed"
@@ -296,6 +306,7 @@ if __name__ == "__main__":
         self=ZWaveOTW()
     except:
         print 'error - unable to start program'
+        self.usage()
         exit()
 
     # fetch and display various attributes of the Controller - these are not required
@@ -306,25 +317,33 @@ if __name__ == "__main__":
     for i in range (0,128*1024):
         blank[i]=255
     try:
-        ih = IntelHex(self.filename)
+        ih = IntelHex(self.filename)        # read in the file
     except:
         print "Failed to open {}".format(self.filename)
+        self.usage()
         exit()
     ih.merge(blank,overlap='ignore')         # fill the empty spaces of the .hex file with 0xFF
 
     # Begin the OTW process
-    for offset in range(0,1*1024,32): # TODO should be 128*1024
+    for offset in range(0,128*1024,32):     # send down the entire file
         mystr=""
         for i in range(0,32):
-            mystr+=pack("B",ih[i+offset])
+            mystr+=pack("B",ih[i+offset])   # pack 32 bytes
         pkt=self.Send2ZWave(pack("BBBBBBB32s",FUNC_ID_ZW_FIRMWARE_UPDATE_NVM,FIRMWARE_UPDATE_NVM_WRITE,(offset>>16)&0x0FF,(offset>>8)&0x0FF,offset&0x0FF,0, 32,mystr),True)   # write 32 bytes per block
+        print ".\b",
+        if pkt==None:
+            print "Download Failed"
+            exit()
         if ord(pkt[2])!=0x01 or ord(pkt[0])!=0x78 or ord(pkt[1])!=0x05: # Then the frame failed so just exit and try again
             print "Download failed: Expected 0x78, 0x05, 0x02, got {:02X}, {:02X}, {:02X}".format(ord(pkt[0]),ord(pkt[1]),ord(pkt[2]))
             exit()
+        time.sleep(.05)
 
     pkt=self.Send2ZWave(pack("BB",FUNC_ID_ZW_FIRMWARE_UPDATE_NVM,FIRMWARE_UPDATE_NVM_IS_VALID_CRC16),True) 
     (retVal,crc16) = unpack("!BH",pkt[2:5])
     print "RetVal={} CRC={}".format(retVal,crc16)
+    if retVal!=0x00:
+        print "CRC is not valid = {}".format(crc16)
     self.Send2ZWave(pack("B",FUNC_ID_SERIAL_API_SOFT_RESET),False)  # Reboot!
 
     print "Rebooting the Z-Wave Interface - please wait..."
