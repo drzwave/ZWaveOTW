@@ -40,10 +40,10 @@ import os
 from struct            import * # PACK
 
 
-COMPORT       = "/dev/ttyAMA0" # Serial port default
+COMPORT       = "/dev/ttyAMA0" # Serial port default - typically /dev/ttyACM0 on Linux or COMxx on Windows.
 
-VERSION       = "0.1 - 2/13/2019"       # Version of this python program
-DEBUG         = 9     # higher values print out more debugging info - 0=off
+VERSION       = "1.0 - 3/19/2019"       # Version of this python program
+DEBUG         = 5     # [0-10] higher values print out more debugging info - 0=off
 
 # Handy defines mostly copied from ZW_transport_api.py
 FUNC_ID_SERIAL_API_GET_INIT_DATA    = 0x02
@@ -51,6 +51,8 @@ FUNC_ID_SERIAL_API_APPL_NODE_INFORMATION = 0x03
 FUNC_ID_SERIAL_API_GET_CAPABILITIES = 0x07
 FUNC_ID_SERIAL_API_SOFT_RESET       = 0x08
 FUNC_ID_ZW_GET_PROTOCOL_VERSION     = 0x09
+FUNC_ID_SERIAL_API_STARTED          = 0x0A
+FUNC_ID_ZW_SET_RF_RECEIVE_MODE      = 0x10
 FUNC_ID_ZW_SEND_DATA                = 0x13
 FUNC_ID_ZW_GET_VERSION              = 0x15
 FUNC_ID_ZW_ADD_NODE_TO_NETWORK      = 0x4A
@@ -113,7 +115,9 @@ TXOPTS = TRANSMIT_OPTION_AUTO_ROUTE | TRANSMIT_OPTION_ACK
 
 # See INS13954-7 section 7 Application Note: Z-Wave Protocol Versions on page 433
 ZWAVE_VER_DECODE = {# Z-Wave version to SDK decoder: https://www.silabs.com/products/development-tools/software/z-wave/embedded-sdk/previous-versions
-        "6.01" : "SDK 6.81.00 09/2017",
+        "6.04" : "SDK 6.81.03 01/2019",
+        "6.02" : "SDK 6.81.01 10/2018",
+        "6.01" : "SDK 6.81.00 09/2018",
         "5.03" : "SDK 6.71.03        ",
         "5.02" : "SDK 6.71.02 07/2017",
         "4.61" : "SDK 6.71.01 03/2017",
@@ -209,11 +213,11 @@ class ZWaveOTW():
         return pkt[1:-1] # strip off the type and checksum
  
  
-    def Send2ZWave( self, SerialAPIcmd, returnStringFlag=False):
+    def Send2ZWave( self, SerialAPIcmd, returnStringFlag=False, timeout=5000):
         ''' Send the command via the SerialAPI to the Z-Wave chip and optionally wait for a response.
-            If ReturnStringFlag=True then returns a binary string of the SerialAPI frame response
+            If ReturnStringFlag=True then returns a binary string of the SerialAPI frame response within TIMEOUT ms
             else returns None
-            Waits for the ACK/NAK/CAN for the SerialAPI and strips that off. 
+            Waits 100ms for the ACK/NAK/CAN for the SerialAPI and strips that off. 
             Removes all SerialAPI data from the UART before sending and ACKs to clear any retries.
         '''
         if self.UZB.inWaiting(): 
@@ -225,27 +229,31 @@ class ZWaveOTW():
         frame = pack("2B", len(SerialAPIcmd)+2, REQUEST) + SerialAPIcmd # add LEN and REQ bytes which are part of the checksum
         chksum= self.checksum(frame)
         pkt = (pack("B",SOF) + frame + pack("B",chksum)) # add SOF to front and CHECKSUM to end
-        if DEBUG>9: print "Sending ", 
-        for c in pkt:
-            if DEBUG>9: print "{:02X},".format(ord(c)),
-            self.UZB.write(c)  # send the command
-        if DEBUG>9: print " "
-        # should always get an ACK/NAK/CAN so wait for it here
-        c=self.GetRxChar(500) # wait up to half second for the ACK
-        if c==None:
-            if DEBUG>1: print "Error - no ACK or NAK"
-        elif ord(c)!=ACK:
-            if DEBUG>1: print "Error - not ACKed = 0x{:02X}".format(ord(c))
-            if ord(c)==CAN:
-                self.UZB.write(pack("B",ACK))   # send an ACK to try to clear the CAN
-                time.sleep(1)
-                for c in pkt:
-                    self.UZB.write(c) # resend the command
-                c=self.GetRxChar(500) # Just drop the ACK this time thru
-                if DEBUG>1: print "Second ACK=0x{:02X}".format(ord(c))
+        for retries in range(1,4):                        # retry up to 3 times. Z-Wave traffic often causes the UART to lose the SOF and drop the frame.
+            if DEBUG>9: print "Sending ", 
+            for c in pkt:
+                if DEBUG>9: print "{:02X},".format(ord(c)),
+                self.UZB.write(c)  # send the command
+            if DEBUG>9: print " "
+            # should always get an ACK/NAK/CAN so wait for it here
+            c=self.GetRxChar(500) # wait for the ACK
+            if c==None:
+                if DEBUG>1: print "no ACK on try #{}".format(retries)
+                for i in range(32):
+                    self.UZB.write(pack("B",ACK))       # send ACKs to see if the LEN was incorrectly received 
+                    if self.UZB.inWaiting(): break      # if we get an ACK/NAK/CAN then stop sending ACKs and retry
+            elif ord(c)==ACK:                       # then the frame is OK so no need to retry
+                break
+            elif ord(c)!=ACK:                       # didn't expect this so just retry
+                if DEBUG>1: print "Error - not ACKed = 0x{:02X}".format(ord(c))
+                self.UZB.write(pack("B",ACK))       # send an ACK to try clear out whatever the problem might be
+                while self.UZB.inWaiting():         # purge UART RX to remove any old frames we don't want
+                    c=self.UZB.read()
+        if retries>1 and DEBUG>5:
+            print "Took {} tries".format(retries)
         response=None
         if returnStringFlag:    # wait for the returning frame for up to 5 seconds
-            response=self.GetZWave()    
+            response=self.GetZWave(timeout)    
         return response
             
 
@@ -267,11 +275,19 @@ class ZWaveOTW():
         pkt=self.Send2ZWave(pack("B",FUNC_ID_SERIAL_API_GET_CAPABILITIES),True)
         (ver, rev, man_id, man_prod_type, man_prod_type_id, supported) = unpack("!2B3H32s", pkt[1:])
         print "SerialAPI Ver={0}.{1}".format(ver,rev)   # SerialAPI version is different than the SDK version
-        print "Mfg={:04X}".format(man_id)
+        print "Mfg={:04X}".format(man_id),
+        if man_id==0: 
+            print "Silicon Labs"
+        else:
+            print ""
         print "ProdID/TypeID={0:02X}:{1:02X}".format(man_prod_type,man_prod_type_id)
         pkt=self.Send2ZWave(pack("B",FUNC_ID_ZW_GET_VERSION),True)  # SDK version
         (VerStr, lib) = unpack("!12sB", pkt[1:])
-        print "{} {}".format(VerStr,ZWAVE_VER_DECODE[VerStr[-5:-1]])
+        VersionKey=VerStr[-5:-1]
+        if VersionKey in ZWAVE_VER_DECODE:
+            print "{} {}".format(VerStr,ZWAVE_VER_DECODE[VersionKey])
+        else:
+            print "Z-Wave version unknown = {}".format(VerStr)
         print "Library={} {}".format(lib,libType[lib])
         pkt=self.Send2ZWave(pack("B",FUNC_ID_SERIAL_API_GET_INIT_DATA),True)
         if pkt!=None and len(pkt)>33:
@@ -325,29 +341,56 @@ if __name__ == "__main__":
     ih.merge(blank,overlap='ignore')         # fill the empty spaces of the .hex file with 0xFF
 
     # Begin the OTW process
+    pkt=self.Send2ZWave(pack("BB",FUNC_ID_ZW_SET_RF_RECEIVE_MODE,0),True) # Turn off the Radio to avoid retries
+    if DEBUG>6 and pkt!=None:
+        retVal=unpack("B",pkt[1])
+        if retVal:
+            print "Radio is off"
+        else:
+            print "Radio is still on {:X}".format(retval)
     for offset in range(0,128*1024,32):     # send down the entire file
         mystr=""
         for i in range(0,32):
             mystr+=pack("B",ih[i+offset])   # pack 32 bytes
         pkt=self.Send2ZWave(pack("BBBBBBB32s",FUNC_ID_ZW_FIRMWARE_UPDATE_NVM,FIRMWARE_UPDATE_NVM_WRITE,(offset>>16)&0x0FF,(offset>>8)&0x0FF,offset&0x0FF,0, 32,mystr),True)   # write 32 bytes per block
-        print ".\b",
+        print "\b.",
+        sys.stdout.flush()
         if pkt==None:
-            print "Download Failed"
+            print "Download Failed - No callback"
             exit()
         if ord(pkt[2])!=0x01 or ord(pkt[0])!=0x78 or ord(pkt[1])!=0x05: # Then the frame failed so just exit and try again
             print "Download failed: Expected 0x78, 0x05, 0x02, got {:02X}, {:02X}, {:02X}".format(ord(pkt[0]),ord(pkt[1]),ord(pkt[2]))
             exit()
-        time.sleep(.05)
 
-    pkt=self.Send2ZWave(pack("BB",FUNC_ID_ZW_FIRMWARE_UPDATE_NVM,FIRMWARE_UPDATE_NVM_IS_VALID_CRC16),True) 
-    (retVal,crc16) = unpack("!BH",pkt[2:5])
-    print "RetVal={} CRC={}".format(retVal,crc16)
-    if retVal!=0x00:
-        print "CRC is not valid = {}".format(crc16)
-    self.Send2ZWave(pack("B",FUNC_ID_SERIAL_API_SOFT_RESET),False)  # Reboot!
+    print "Wait - computing the CRC"
+    pkt=self.Send2ZWave(pack("BB",FUNC_ID_ZW_FIRMWARE_UPDATE_NVM,FIRMWARE_UPDATE_NVM_IS_VALID_CRC16),True, 10000) # extend timeout as CRC takes several seconds
+    if pkt==None:
+        print "Failed to get a response to the Update NVM"
+        retVal=0
+    else:
+        (retVal,crc16) = unpack("!BH",pkt[2:5])
+    if DEBUG>9:print "RetVal={} CRC={}".format(retVal,crc16)
+
+    if retVal!=0x01:
+        print "CRC is not valid = {} - exiting".format(crc16)
+        self.Send2ZWave(pack("B",FUNC_ID_SERIAL_API_SOFT_RESET),False)  # Reboot!
+        exit()
+
+    pkt=self.Send2ZWave(pack("BB",FUNC_ID_ZW_FIRMWARE_UPDATE_NVM,FIRMWARE_UPDATE_NVM_SET_NEW_IMAGE),True) # Set the bit that there is a new firmware image available
+    if pkt==None:
+        print "Failed to Set New Image"
+        exit()
+    retVal=unpack("!B",pkt[2])
+    if retVal==0:
+        print "Firmware NewImage already set {:X}".format(retVal)
 
     print "Rebooting the Z-Wave Interface - please wait..."
-    time.sleep(5)   # reboot takes several seconds while the flash is updated
+    self.Send2ZWave(pack("B",FUNC_ID_SERIAL_API_SOFT_RESET),False)  # Reboot!
+
+    for i in range(30): # wait 30 seconds for the flash to be updated and reboot
+        if self.UZB.inWaiting(): break  # Newer firmware will send a START upon power up indicating the chip is ready
+        time.sleep(1)
+
     self.PrintVersion()
     print "Done"
 
