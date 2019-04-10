@@ -6,4 +6,11 @@ The hex file typically needed is in the SDK/ProductPlus/bin/SerialAPI_Static dir
 The file in that directory depends on the frequency.
 The filename MUST have OTW in the name. 
 If you are using the USB port, use the USBVP files otherwise if using the UART use the ones without USBVP.
-Use only the .OTZ files. The .HEX files are for programming the chip the first time including the bootloader.
+Use only the .OTZ files. 
+The .HEX files are for programming the chip the first time including the bootloader.
+
+
+When upgrading from the 6.51 or earlier releases, you MUST first OTA to:
+serialapi_controller_static_OTU_ZW050x_US_6.61.01_intermediate.ota
+which will update the bootloader to the new .OTZ file format.
+Then you can update to newer versions of the SDK.
