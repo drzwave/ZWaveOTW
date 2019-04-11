@@ -42,8 +42,8 @@ from struct            import * # PACK
 
 COMPORT       = "/dev/ttyAMA0" # Serial port default - typically /dev/ttyACM0 on Linux or COMxx on Windows.
 
-VERSION       = "1.0 - 3/19/2019"       # Version of this python program
-DEBUG         = 5     # [0-10] higher values print out more debugging info - 0=off
+VERSION       = "1.1 - 4/11/2019"       # Version of this python program
+DEBUG         = 6     # [0-10] higher values print out more debugging info - 0=off
 
 # Handy defines mostly copied from ZW_transport_api.py
 FUNC_ID_SERIAL_API_GET_INIT_DATA    = 0x02
@@ -358,9 +358,8 @@ if __name__ == "__main__":
         if pkt==None:
             print "Download Failed - No callback"
             exit()
-        if ord(pkt[2])!=0x01 or ord(pkt[0])!=0x78 or ord(pkt[1])!=0x05: # Then the frame failed so just exit and try again
-            print "Download failed: Expected 0x78, 0x05, 0x02, got {:02X}, {:02X}, {:02X}".format(ord(pkt[0]),ord(pkt[1]),ord(pkt[2]))
-            exit()
+        if ord(pkt[2])!=0x01 or ord(pkt[0])!=0x78 or ord(pkt[1])!=0x05: # Occasionally will get 0x00 which is OK - just keep going
+            if debug>5: print "No change for this block: Expected 0x78, 0x05, 0x01, got {:02X}, {:02X}, {:02X} at address {:X}".format(ord(pkt[0]),ord(pkt[1]),ord(pkt[2]),offset)
 
     print "Wait - computing the CRC"
     pkt=self.Send2ZWave(pack("BB",FUNC_ID_ZW_FIRMWARE_UPDATE_NVM,FIRMWARE_UPDATE_NVM_IS_VALID_CRC16),True, 10000) # extend timeout as CRC takes several seconds

@@ -14,3 +14,7 @@ When upgrading from the 6.51 or earlier releases, you MUST first OTA to:
 serialapi_controller_static_OTU_ZW050x_US_6.61.01_intermediate.ota
 which will update the bootloader to the new .OTZ file format.
 Then you can update to newer versions of the SDK.
+
+Note that prior to 6.61 there are separate files for ZM5202 and other Z-Wave chips
+as the limited pinout of the ZM5202 requires a different firmware load.
+Later release are able to handle this automatically via settings in the NVR.
