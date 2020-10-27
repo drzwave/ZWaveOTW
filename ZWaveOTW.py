@@ -42,7 +42,7 @@ from struct            import * # PACK
 
 COMPORT       = "/dev/ttyAMA0" # Serial port default - typically /dev/ttyACM0 on Linux or COMxx on Windows.
 
-VERSION       = "1.1 - 4/11/2019"       # Version of this python program
+VERSION       = "1.2 - 10/18/2020"       # Version of this python program
 DEBUG         = 6     # [0-10] higher values print out more debugging info - 0=off
 
 # Handy defines mostly copied from ZW_transport_api.py
@@ -299,22 +299,26 @@ class ZWaveOTW():
                         print "{},".format(i+1+ 8*(k-4)),
             print " "
         pkt=self.Send2ZWave(pack("BB",FUNC_ID_ZW_FIRMWARE_UPDATE_NVM,FIRMWARE_UPDATE_NVM_INIT),True)
-        (cmd, FirmwareUpdateSupported) = unpack("!BB", pkt[1:])
-        if FirmwareUpdateSupported!=0x01:
-            print "Firmware is not OTW capable - exiting {}".format(FirmwareUpdateSupported)
+        if pkt!=None:
+            (cmd, FirmwareUpdateSupported) = unpack("!BB", pkt[1:])
+            if FirmwareUpdateSupported!=0x01:
+                print "Firmware is not OTW capable - exiting {}".format(FirmwareUpdateSupported)
+                exit()
+        else:
+            print "USB7 is not updateable via OTW - use XMODEM and the bootloader instead"
             exit()
         if self.filename=="":        # Skip OTW if no hex file is on the command line
             exit()
 
-    def usage(self):
-        print ""
-        print "Usage: python ZWaveOTW.py [filename] [COMxx]"
-        print "Version {}".format(VERSION)
-        print "Filename is the name of the hex file to be programmed into the Z-Wave Interface"
-        print "Filename must not contain the strings 'COM' or 'tty'"
-        print "If Filename is not included then the version of the Z-Wave Interface is printed"
-        print "COMxx is the Z-Wave UART interface - typically COMxx for windows and /dev/ttyXXXX for Linux"
-        print ""
+def usage():
+    print ""
+    print "Usage: python ZWaveOTW.py [filename] [COMxx]"
+    print "Version {}".format(VERSION)
+    print "Filename is the name of the hex file to be programmed into the Z-Wave Interface"
+    print "Filename must not contain the strings 'COM' or 'tty'"
+    print "If Filename is not included then the version of the Z-Wave Interface is printed"
+    print "COMxx is the Z-Wave UART interface - typically COMxx for windows and /dev/ttyXXXX for Linux"
+    print ""
 
 if __name__ == "__main__":
     ''' Start the app if this file is executed'''
@@ -322,7 +326,7 @@ if __name__ == "__main__":
         self=ZWaveOTW()
     except:
         print 'error - unable to start program'
-        self.usage()
+        usage()
         exit()
 
     # fetch and display various attributes of the Controller - these are not required
