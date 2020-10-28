@@ -113,9 +113,15 @@ RESPONSE = 0x01
 # Most Z-Wave commands want the autoroute option on to be sure it gets thru. Don't use Explorer though as that causes unnecessary delays.
 TXOPTS = TRANSMIT_OPTION_AUTO_ROUTE | TRANSMIT_OPTION_ACK
 
-# See INS13954-7 section 7 Application Note: Z-Wave Protocol Versions on page 433
+# See INS13954-12 section 7 Application Note: Z-Wave Protocol Versions on page 433
 ZWAVE_VER_DECODE = {# Z-Wave version to SDK decoder: https://www.silabs.com/products/development-tools/software/z-wave/embedded-sdk/previous-versions
+        "6.09" : "SDK 6.82.01 04/2020",
+        "6.08" : "SDK 6.82.00 Beta   ",
+        "6.07" : "SDK 6.81.06 07/2019",
+        "6.06" : "SDK 6.81.05        ",
+        "6.05" : "SDK 6.81.04        ",
         "6.04" : "SDK 6.81.03 01/2019",
+        "6.03" : "SDK 6.81.02        ",
         "6.02" : "SDK 6.81.01 10/2018",
         "6.01" : "SDK 6.81.00 09/2018",
         "5.03" : "SDK 6.71.03        ",
@@ -299,26 +305,22 @@ class ZWaveOTW():
                         print "{},".format(i+1+ 8*(k-4)),
             print " "
         pkt=self.Send2ZWave(pack("BB",FUNC_ID_ZW_FIRMWARE_UPDATE_NVM,FIRMWARE_UPDATE_NVM_INIT),True)
-        if pkt!=None:
-            (cmd, FirmwareUpdateSupported) = unpack("!BB", pkt[1:])
-            if FirmwareUpdateSupported!=0x01:
-                print "Firmware is not OTW capable - exiting {}".format(FirmwareUpdateSupported)
-                exit()
-        else:
-            print "USB7 is not updateable via OTW - use XMODEM and the bootloader instead"
+        (cmd, FirmwareUpdateSupported) = unpack("!BB", pkt[1:])
+        if FirmwareUpdateSupported!=0x01:
+            print "Firmware is not OTW capable - exiting {}".format(FirmwareUpdateSupported)
             exit()
         if self.filename=="":        # Skip OTW if no hex file is on the command line
             exit()
 
-def usage():
-    print ""
-    print "Usage: python ZWaveOTW.py [filename] [COMxx]"
-    print "Version {}".format(VERSION)
-    print "Filename is the name of the hex file to be programmed into the Z-Wave Interface"
-    print "Filename must not contain the strings 'COM' or 'tty'"
-    print "If Filename is not included then the version of the Z-Wave Interface is printed"
-    print "COMxx is the Z-Wave UART interface - typically COMxx for windows and /dev/ttyXXXX for Linux"
-    print ""
+    def usage(self):
+        print ""
+        print "Usage: python ZWaveOTW.py [filename] [COMxx]"
+        print "Version {}".format(VERSION)
+        print "Filename is the name of the hex file to be programmed into the Z-Wave Interface"
+        print "Filename must not contain the strings 'COM' or 'tty'"
+        print "If Filename is not included then the version of the Z-Wave Interface is printed"
+        print "COMxx is the Z-Wave UART interface - typically COMxx for windows and /dev/ttyXXXX for Linux"
+        print ""
 
 if __name__ == "__main__":
     ''' Start the app if this file is executed'''
@@ -326,7 +328,7 @@ if __name__ == "__main__":
         self=ZWaveOTW()
     except:
         print 'error - unable to start program'
-        usage()
+        self.usage()
         exit()
 
     # fetch and display various attributes of the Controller - these are not required
