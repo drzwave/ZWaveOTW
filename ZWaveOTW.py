@@ -45,7 +45,7 @@ from struct            import * # PACK
 #COMPORT       = "/dev/ttyAMA0" # Serial port default - typically /dev/ttyACM0 on Linux
 COMPORT       = "COM13" # Serial port default - On Windows it will be via a COMxx port
 
-VERSION       = "1.3 - 11/02/2020"       # Version of this python program
+VERSION       = "1.4 - 11/17/2020"       # Version of this python program
 DEBUG         = 5     # [0-10] higher values print out more debugging info - 0=off
 
 # Handy defines mostly copied from ZW_transport_api.py
@@ -120,36 +120,36 @@ TXOPTS = bytes([TRANSMIT_OPTION_AUTO_ROUTE[0] | TRANSMIT_OPTION_ACK[0]])
 
 # See INS13954-12 section 7 Application Note: Z-Wave Protocol Versions on page 433
 ZWAVE_VER_DECODE = {# Z-Wave version to SDK decoder: https://www.silabs.com/products/development-tools/software/z-wave/embedded-sdk/previous-versions
-        "6.09" : "SDK 6.82.01 04/2020",
-        "6.08" : "SDK 6.82.00 Beta   ",
-        "6.07" : "SDK 6.81.06 07/2019",
-        "6.06" : "SDK 6.81.05        ",
-        "6.05" : "SDK 6.81.04        ",
-        "6.04" : "SDK 6.81.03 01/2019",
-        "6.03" : "SDK 6.81.02        ",
-        "6.02" : "SDK 6.81.01 10/2018",
-        "6.01" : "SDK 6.81.00 09/2018",
-        "5.03" : "SDK 6.71.03        ",
-        "5.02" : "SDK 6.71.02 07/2017",
-        "4.61" : "SDK 6.71.01 03/2017",
-        "4.60" : "SDK 6.71.00 01/2017",
-        "4.62" : "SDK 6.61.01 04/2017",  # This is the INTERMEDIATE version?
-        "4.33" : "SDK 6.61.00 04/2016",
-        "4.54" : "SDK 6.51.10 02/2017",
-        "4.38" : "SDK 6.51.09 07/2016",
-        "4.34" : "SDK 6.51.08 05/2016",
-        "4.24" : "SDK 6.51.07 02/2016",
-        "4.05" : "SDK 6.51.06 06/2015 or SDK 6.51.05 12/2014",
-        "4.01" : "SDK 6.51.04 05/2014",
-        "3.99" : "SDK 6.51.03 07/2014",
-        "3.95" : "SDK 6.51.02 05/2014",
-        "3.92" : "SDK 6.51.01 04/2014",
-        "3.83" : "SDK 6.51.00 12/2013",
-        "3.79" : "SDK 6.50.01        ",
-        "3.71" : "SDK 6.50.00        ",
-        "3.35" : "SDK 6.10.00        ",
-        "3.41" : "SDK 6.02.00        ",
-        "3.37" : "SDK 6.01.03        "
+        b"6.09" : "SDK 6.82.01 04/2020",
+        b"6.08" : "SDK 6.82.00 Beta   ",
+        b"6.07" : "SDK 6.81.06 07/2019",
+        b"6.06" : "SDK 6.81.05        ",
+        b"6.05" : "SDK 6.81.04        ",
+        b"6.04" : "SDK 6.81.03 01/2019",
+        b"6.03" : "SDK 6.81.02        ",
+        b"6.02" : "SDK 6.81.01 10/2018",
+        b"6.01" : "SDK 6.81.00 09/2018",
+        b"5.03" : "SDK 6.71.03        ",
+        b"5.02" : "SDK 6.71.02 07/2017",
+        b"4.61" : "SDK 6.71.01 03/2017",
+        b"4.60" : "SDK 6.71.00 01/2017",
+        b"4.62" : "SDK 6.61.01 04/2017",  # This is the INTERMEDIATE version?
+        b"4.33" : "SDK 6.61.00 04/2016",
+        b"4.54" : "SDK 6.51.10 02/2017",
+        b"4.38" : "SDK 6.51.09 07/2016",
+        b"4.34" : "SDK 6.51.08 05/2016",
+        b"4.24" : "SDK 6.51.07 02/2016",
+        b"4.05" : "SDK 6.51.06 06/2015 or SDK 6.51.05 12/2014",
+        b"4.01" : "SDK 6.51.04 05/2014",
+        b"3.99" : "SDK 6.51.03 07/2014",
+        b"3.95" : "SDK 6.51.02 05/2014",
+        b"3.92" : "SDK 6.51.01 04/2014",
+        b"3.83" : "SDK 6.51.00 12/2013",
+        b"3.79" : "SDK 6.50.01        ",
+        b"3.71" : "SDK 6.50.00        ",
+        b"3.35" : "SDK 6.10.00        ",
+        b"3.41" : "SDK 6.02.00        ",
+        b"3.37" : "SDK 6.01.03        "
         }
 
 class ZWaveOTW():
@@ -180,7 +180,7 @@ class ZWaveOTW():
             self.UZB= serial.Serial(port=self.COMPORT,baudrate=115200,timeout=2)
         except serial.SerialException:
             print("Unable to open serial port {}".format(self.COMPORT))
-            exit()
+            raise
 
     def checksum(self,pkt):
         ''' compute the Z-Wave SerialAPI checksum at the end of each frame'''
@@ -303,7 +303,7 @@ class ZWaveOTW():
         (VerStr, lib) = unpack("!12sB", pkt[1:])
         VersionKey=VerStr[-5:-1]
         if VersionKey in ZWAVE_VER_DECODE:
-            print("{} {}".format(VerStr,ZWAVE_VER_DECODE[VersionKey]))
+            print("{} = {}".format(VerStr,ZWAVE_VER_DECODE[VersionKey]))
         else:
             print("Z-Wave version unknown = {}".format(VerStr))
         print("Library={} {}".format(lib,libType[lib]))
@@ -330,7 +330,7 @@ class ZWaveOTW():
         if self.filename=="":        # Skip OTW if no hex file is on the command line - just exit
             exit()
 
-    def usage(self):
+    def usage():
         print("")
         print("Usage: python ZWaveOTW.py [filename] [COMxx]")
         print("Version {}".format(VERSION))
@@ -346,7 +346,7 @@ if __name__ == "__main__":
         self=ZWaveOTW()
     except:
         print('error - unable to start program')
-        self.usage()
+        ZWaveOTW.usage()
         exit()
 
     # fetch and display various attributes of the Controller - these are not required
